@@ -1,0 +1,9 @@
+FROM daocloud.io/redis
+
+MAINTAINER daba0007
+
+ADD redis-master.conf /etc/redis/redis.conf
+
+WORKDIR /etc/redis/
+
+CMD redis-server redis.conf

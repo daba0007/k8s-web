@@ -1,0 +1,11 @@
+FROM daocloud.io/mysql
+
+MAINTAINER daba0007
+
+RUN cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo "Asia/shanghai" >> /etc/timezone
+
+COPY mysqld.cnf /etc/mysql/mysql.conf.d/
+
+COPY entrypoint.sh /
+
+RUN RAND="$(date +%s | rev | cut -c 1-2)$(echo ${RANDOM})" && sed -i 's/server-id/server-id='$RAND'/g' /etc/mysql/mysql.conf.d/mysqld.cnf

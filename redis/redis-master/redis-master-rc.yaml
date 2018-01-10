@@ -1,0 +1,18 @@
+apiVersion: v1                              # api版本
+kind: ReplicationController                 # 类型是rc
+metadata:                                   # 元数据(就是rc的对象)
+  name: redis-master
+spec:                                       # 
+  replicas: 1                               # 表示运行1个pod实例，如果多个pod可做LB和HA
+  selector:                                 # 是RC的pod选择器，即监视和管理拥有这些标签的pod实例。当运行的pod实例小于replicas时，RC会根据spec下的template段定义的pod模板来生成一个新的pod实例。
+    name: redis-master
+  template:                                 # 定义的模板，pod实例不足时会运行
+     metadata:
+       labels:                              # lables属性指定了该Pod的标签，注意：这里的lables必须匹配RC的 spec:selector
+         name: redis-master
+     spec:
+       containers:
+       - name: redis-master
+         image: daba0007/redis-master
+         ports:
+         - containerPort: 6379

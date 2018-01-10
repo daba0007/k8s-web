@@ -1,0 +1,9 @@
+FROM daocloud.io/redis
+
+MAINTAINER daba0007
+
+ADD redis-slave.conf /etc/redis/redis.conf
+
+WORKDIR /etc/redis/
+
+CMD redis-server redis.conf --slaveof ${REDIS_MASTER_SERVICE_HOST} ${REDIS_MASTER_SERVICE_PORT}
