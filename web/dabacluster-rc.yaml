@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: dabacluster
+  labels:
+    name: dabacluster
+spec:
+  replicas: 3
+  selector:
+    name: dabacluster
+  template:
+    metadata:
+      labels:
+        name: dabacluster
+    spec:
+      containers:
+      - name: dabaweb
+        image: daba0007/dabaweb
+        env:
+        - name: GET_HOSTS_FROM
+          value: env
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: dabaweb-dir
+          mountPath: /usr/src/dabaweb
+          readOnly: false
+      - name: dabanginx                                     # 这个是nginx集群，暴露80端口方便服务暴露
+        image: daba0007/dabanginx
+        env:
+        - name: GET_HOSTS_FROM
+          value: env
+        ports:
+        - containerPort: 80
+        volumeMounts:                                       # 也要挂载这两个数据卷
+        - name: dabaweb-dir
+          mountPath: /usr/src/dabaweb
+          readOnly: false
+      volumes:
+      - name: dabaweb-dir
+        hostPath:
+          path: /root/k8s/web/web/dabaweb/

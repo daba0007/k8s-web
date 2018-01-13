@@ -1,0 +1,22 @@
+# 基础镜像
+FROM daocloud.io/python:3.6
+
+# 维护者信息
+MAINTAINER daba0007
+
+ADD dabaweb.tar.gz /usr/src/
+
+# app 所在目录
+WORKDIR /usr/src/dabaweb
+
+RUN pip install xlutils
+
+RUN pip install django-redis
+# 安装 app 所需依赖
+RUN pip install --no-cache-dir -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+
+# 启动执行命令
+COPY entrypoint.sh /usr/src/
+WORKDIR /usr/src
+RUN chmod +x /usr/src/entrypoint.sh
+ENTRYPOINT ["/usr/src/entrypoint.sh"]
