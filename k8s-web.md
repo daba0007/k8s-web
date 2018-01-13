@@ -894,13 +894,3 @@ kubectl delete rc redis-master
 >2. http://blog.csdn.net/test103/article/details/55663562
 >3. https://my.oschina.net/FrankXin/blog/875414
 >4. https://www.jianshu.com/p/509b65e9a4f5
-
-
-        volumeMounts:
-        - name: dabaweb-dir
-          mountPath: /usr/src/dabaweb
-          readOnly: false
-      volumes:
-      - name: dabaweb-dir
-        hostPath:
-          path: /root/k8s/web/web/dabaweb
