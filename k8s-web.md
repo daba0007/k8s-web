@@ -79,7 +79,7 @@ spec:                                       #
         name: redis-master
     spec:
       containers:
-      - name: master
+      - name: redis-master
         image: daba0007/redis-master
         ports:
         - containerPort: 6379
@@ -654,9 +654,231 @@ mysql> show databases;
 5 rows in set (0.01 sec)
 
 ```
+## web集群
+
+我使用的是django做为架构来搭建web。这里web前端的内容我就不做扩展了，我还是使用上次随便写的那个网站来做测试。不过web集群在这里和docker当时的做法不太一样了。之前我们是使用了web容器和nginx容器共享数据卷容器来实现网站数据共享。
+
+nginx是一个高性能的HTTP和反向代理服务器,在web集群中我们使用它做为http的代理服务器，在k8s中，我们完全可以把这web容器和nginx容器写在一个同一个pod里面，因为他们共享着数据卷，关系十分地亲密。
+
+使用django连接mysql和redis服务主要是在setting中修改。
+```
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'form',
+        'USER':'root',
+        'PASSWORD':'123456',
+        #'HOST': '127.0.0.1'
+        'HOST':'service_mysql',
+        'Port':'3306',
+   }
+
+}
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        #"LOCATION": "redis://127.0.0.1:6379",
+        "LOCATION": "redis://service_redis:6379",               
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
+
+```
+我们需要把这里host的mysql和location的redis换成服务的ip。首先来编写dockerfile
+```
+# 基础镜像
+FROM daocloud.io/python:3.6
+
+# 维护者信息
+MAINTAINER daba0007
+
+ADD dabaweb.tar.gz /usr/src/
+
+# app 所在目录
+WORKDIR /usr/src/dabaweb
+
+RUN pip install xlutils
+
+RUN pip install django-redis
+# 安装 app 所需依赖
+RUN pip install --no-cache-dir -r requirements.txt -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+
+# 启动执行命令
+COPY entrypoint.sh /usr/src/
+WORKDIR /usr/src
+RUN chmod +x /usr/src/entrypoint.sh
+ENTRYPOINT ["/usr/src/entrypoint.sh"]
+
+```
+这里的启动脚本如下 entrypoint.sh
+```
+#!/bin/bash
+
+sed -i "s/service_mysql/$(echo $MYSQL_MASTER_SERVICE_HOST)/g" /usr/src/dabaweb/dabaweb/setting.py
+
+sed -i "s/service_redis/$(echo $REDIS_MASTER_SERVICE_HOST)/g" /usr/src/dabaweb/dabaweb/setting.py
+
+#使用uwsgi来启动django
+/usr/local/bin/uwsgi --http :8000 --chdir /usr/src/dabaweb -w dabaweb.wsgi
+```
+创建dockerfile,并且上传
+```
+docker build -t daba0007/dabaweb  .
+docker push daba0007/dabaweb
+```
+
+再构造一个nginx的dockerfile
+```
+FROM daba0007/nginx
+
+MAINTAINER daba0007
+
+RUN rm /etc/nginx/conf.d/default.conf
+ADD nginx-conf/ /etc/nginx/conf.d/
+
+```
+nginx服务连接dabaweb是在nginx.conf中proxy_pass,我们需要把web替代成localhost,因为是在同一个pod中。
+```
+server {
+
+    listen 80;
+    server_name localhost;
+    charset utf-8;
+    root   /usr/src/dabaweb;
+    access_log  /var/log/nginx/django.log;
+
+    location ^~ /static {
+        alias /usr/src/dabaweb/static;
+    }
+
+    location / {
+        proxy_pass http://localhost:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+}
+```
+
+那么我们需要挂载文件夹。编写dabacluster-rc.yaml
+```
+apiVersion: v1
+kind: ReplicationController
+metadata:
+  name: dabacluster
+  labels:
+    name: dabacluster
+spec:
+  replicas: 3
+  selector:
+    name: dabacluster
+  template:
+    metadata:
+      labels:
+        name: dabacluster
+    spec:
+      containers:
+      - name: dabaweb
+        image: daba0007/dabaweb
+        env:
+        - name: GET_HOSTS_FROM
+          value: env
+        ports:
+        - containerPort: 8000
+        volumeMounts:
+        - name: dabaweb-dir
+          mountPath: /usr/src/dabaweb
+          readOnly: false
+      - name: dabanginx                                     # 这个是nginx集群，暴露80端口方便服务暴露
+        image: daba0007/dabanginx
+        env:
+        - name: GET_HOSTS_FROM
+          value: env
+        ports:
+        - containerPort: 80
+        volumeMounts:                                       # 也要挂载这两个数据卷
+        - name: dabaweb-dir
+          mountPath: /usr/src/dabaweb
+          readOnly: false
+      volumes:
+      - name: dabaweb-dir
+        hostPath:
+          path: /root/k8s/web/web/dabaweb/
+
+```
+然后执行
+```
+[root@k8s-master web]# kubectl create -f dabacluster-rc.yaml
+replicationcontroller "dabacluster" created
+
+NAME           DESIRED   CURRENT   READY     AGE
+dabacluster    3         3         3         1m
+mysql-master   1         1         1         1d
+mysql-slave    2         2         2         1d
+redis-master   1         1         1         3d
+redis-slave    2         2         2         3d
+
+
+[root@k8s-master web]# kubectl get pod
+NAME                 READY     STATUS    RESTARTS   AGE
+dabacluster-5kp26    2/2       Running   0          18s
+dabacluster-7dhsk    2/2       Running   0          18s
+dabacluster-mww8t    2/2       Running   0          18s
+mysql-master-whtwd   1/1       Running   3          2d
+mysql-slave-6x8bx    1/1       Running   3          2d
+mysql-slave-n58vk    1/1       Running   3          2d
+redis-master-25bpz   1/1       Running   6          4d
+redis-slave-plrxq    1/1       Running   5          4d
+redis-slave-thb9r    1/1       Running   5          4d
+
+```
+再编写web服务web-svc.yaml，连接服务时，使用Service的NodePort给kubernetes集群中Service映射一个外网可以访问的端口，这样一来，外部就可以通过NodeIP+NodePort的方式访问集群中的服务了。
+```
+apiVersion: v1
+kind: Service
+metadata:
+  name: dabacluster
+  labels:
+    name: dabacluster
+spec:
+  ports:
+    type: NodePort  
+    - port: 80      
+      targetPort: 80 
+  nodePort: 32000                           # 指明暴露在外端口的port，即k8s中的80映射到主机上32000端口  
+  selector:
+    name: dabacluster
+```
+然后执行
+```
+[root@k8s-master web]# kubectl create -f dabacluster-svc.yaml
+service "dabacluster" created
+
+NAME           TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)        AGE
+dabacluster    NodePort    10.68.64.177    <none>        80:32000/TCP   10m
+kubernetes     ClusterIP   10.68.0.1       <none>        443/TCP        4d
+mysql-master   ClusterIP   10.68.83.79     <none>        3306/TCP       2d
+mysql-slave    ClusterIP   10.68.208.186   <none>        3306/TCP       2d
+redis-master   ClusterIP   10.68.69.173    <none>        6379/TCP       4d
+redis-slave    ClusterIP   10.68.174.55    <none>        6379/TCP       4d
+```
+### 测试
+访问http://ip:32000,发现成功的访问，说明服务启动成功
+
+## 节点
+花了两大篇来介绍k8s,细心的人就会发现我们只说到了svc,rc和pod。我们之前构造k8s的时候是使用了三个节点，一个master和两个minion,在搭建web集群的过程中完全没提到啊，它们发生了什么？
+
+其实对于每个节点(在我的集群中是三个，一个master和两个minion),他们负载的能力肯定是有限的。我们在每次写服务的时候，都会分配一些资源给节点。当一个节点的负载超额的时候（pod数量过多或系统资源不够分配），k8s会自动加入下一个节点，并且将这些超出的pod放到下一个节点中。也就是说，如果我们有足够多的节点，在master上操作的时候就感觉像是在一个超级计算机中，所有的需求都能满足。
 
 
 ### 一些常见的检查错误命令
+进入某个节点查看
+```
+kubectl exec -ti mysql-master-whtwd  /bin/bash
+```
 得到log
 ```
 kubectl logs -f [pods]                          # [pods]写入你pods的名字,也可以是rc,svc等等
@@ -672,3 +894,13 @@ kubectl delete rc redis-master
 >2. http://blog.csdn.net/test103/article/details/55663562
 >3. https://my.oschina.net/FrankXin/blog/875414
 >4. https://www.jianshu.com/p/509b65e9a4f5
+
+
+        volumeMounts:
+        - name: dabaweb-dir
+          mountPath: /usr/src/dabaweb
+          readOnly: false
+      volumes:
+      - name: dabaweb-dir
+        hostPath:
+          path: /root/k8s/web/web/dabaweb
